@@ -171,10 +171,10 @@ def scan_assets():
 
     return jsonify(response)
 
-
 @app.route('/')
-def home():
-    return "Velyn AI Service is Online and Running!"
+def health_check():
+    return "AI Server is LIVE. If other pages load forever, the Database is blocking us."
+
 
 # -----------------------------
 # ALL ANOMALIES ENDPOINT
