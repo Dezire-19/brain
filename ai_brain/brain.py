@@ -12,7 +12,7 @@ app = Flask(__name__)
 CORS(app)
 
 MODEL_FILE = 'asset_failure_model.pkl'
-PHP_API_BASE = "http://localhost/inventory_system/assets.php"  # PHP API endpoint
+PHP_API_BASE = "https://velynasset.infinityfree.me/inventory_system/assets.php"
 
 # -----------------------------
 # GLOBAL STORAGE
