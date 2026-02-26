@@ -81,34 +81,47 @@ def analyze_asset(asset_id, d_count, age_days, components_dict=None, environment
 # -----------------------------
 def fetch_assets():
     try:
-        # We add a 'User-Agent' to look like a real browser
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        response = requests.get(f"{PHP_API_BASE}?action=all", headers=headers)
+        # 1. We MUST use a session to keep cookies (some hosts require this)
+        session = requests.Session()
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+        }
         
-        # If InfinityFree blocks this, you will see an error here
-        response.raise_for_status() 
+        # 2. Add a timeout so Render doesn't hang forever
+        response = session.get(f"{PHP_API_BASE}?action=all", headers=headers, timeout=10)
+        
+        # 3. If the response isn't JSON, InfinityFree is blocking you
+        if "text/html" in response.headers.get("Content-Type", ""):
+            print("CRITICAL: InfinityFree sent a Security Page (HTML) instead of Data (JSON).")
+            return []
+
         return response.json()
     except Exception as e:
-        print(f"Error fetching assets: {e}")
+        print(f"Connection Error: {e}")
         return []
 
 def fetch_damaged_components(asset_id):
     try:
-        response = requests.get(f"{PHP_API_BASE}?action=damaged")
-        response.raise_for_status()
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        # This action fetches ALL damaged items at once to save time
+        response = requests.get(f"{PHP_API_BASE}?action=damaged", headers=headers, timeout=10)
+        
+        if response.status_code != 200:
+            return 0, {}
+            
         all_damaged = response.json()
         comp_dict = {}
         d_count = 0
         for item in all_damaged:
-            if item['asset_id'] != asset_id:
-                continue
-            comps = [c.strip() for c in item['component'].split(',') if c.strip()]
-            for c in comps:
-                comp_dict[c] = comp_dict.get(c, 0) + 1
-                d_count += 1
+            if str(item['asset_id']) == str(asset_id):
+                comps = [c.strip() for c in item['component'].split(',') if c.strip()]
+                for c in comps:
+                    comp_dict[c] = comp_dict.get(c, 0) + 1
+                    d_count += 1
         return d_count, comp_dict
     except Exception as e:
-        print(f"Error fetching damaged components: {e}")
+        print(f"Error: {e}")
         return 0, {}
 
 # -----------------------------
