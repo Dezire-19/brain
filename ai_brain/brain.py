@@ -81,8 +81,12 @@ def analyze_asset(asset_id, d_count, age_days, components_dict=None, environment
 # -----------------------------
 def fetch_assets():
     try:
-        response = requests.get(f"{PHP_API_BASE}?action=all")
-        response.raise_for_status()
+        # We add a 'User-Agent' to look like a real browser
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        response = requests.get(f"{PHP_API_BASE}?action=all", headers=headers)
+        
+        # If InfinityFree blocks this, you will see an error here
+        response.raise_for_status() 
         return response.json()
     except Exception as e:
         print(f"Error fetching assets: {e}")
