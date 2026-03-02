@@ -1,0 +1,12 @@
+{
+    "name": "hsnp/inventory_system",
+    "description": "HSNP Asset Inventory System",
+    "authors": [
+        {
+            "name": "Ash Tinao"
+        }
+    ],
+    "require": {
+        "phpoffice/phpspreadsheet": "1.28"
+    }
+}
