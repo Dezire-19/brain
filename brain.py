@@ -187,6 +187,26 @@ def all_anomalies():
 
     return jsonify({"anomalies": result, "count": len(result)})
 
+@app.route('/all_assets', methods=['GET'])
+def all_assets():
+    try:
+        # Fetch all assets from your PHP API
+        assets = fetch_assets()
+
+        # Return them directly as JSON
+        return jsonify({
+            "assets_fetched": assets,
+            "count": len(assets),
+            "note": "All assets fetched from PHP API"
+        })
+
+    except Exception as e:
+        return jsonify({
+            "assets_fetched": [],
+            "count": 0,
+            "error": str(e)
+        })
+
 # -----------------------------
 # RUN APP
 # -----------------------------
