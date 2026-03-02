@@ -12,8 +12,7 @@ app = Flask(__name__)
 CORS(app)
 
 MODEL_FILE = 'asset_failure_model.pkl'
-PHP_API_BASE = "https://velynasset.infinityfree.me/inventory_system/assets.php"
-
+PHP_API_BASE = "https://velynasset.infinityfree.me/assets.php"
 # -----------------------------
 # GLOBAL STORAGE
 # -----------------------------
@@ -81,47 +80,30 @@ def analyze_asset(asset_id, d_count, age_days, components_dict=None, environment
 # -----------------------------
 def fetch_assets():
     try:
-        # 1. We MUST use a session to keep cookies (some hosts require this)
-        session = requests.Session()
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json',
-        }
-        
-        # 2. Add a timeout so Render doesn't hang forever
-        response = session.get(f"{PHP_API_BASE}?action=all", headers=headers, timeout=10)
-        
-        # 3. If the response isn't JSON, InfinityFree is blocking you
-        if "text/html" in response.headers.get("Content-Type", ""):
-            print("CRITICAL: InfinityFree sent a Security Page (HTML) instead of Data (JSON).")
-            return []
-
+        response = requests.get(f"{PHP_API_BASE}?action=all")
+        response.raise_for_status()
         return response.json()
     except Exception as e:
-        print(f"Connection Error: {e}")
+        print(f"Error fetching assets: {e}")
         return []
 
 def fetch_damaged_components(asset_id):
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        # This action fetches ALL damaged items at once to save time
-        response = requests.get(f"{PHP_API_BASE}?action=damaged", headers=headers, timeout=10)
-        
-        if response.status_code != 200:
-            return 0, {}
-            
+        response = requests.get(f"{PHP_API_BASE}?action=damaged")
+        response.raise_for_status()
         all_damaged = response.json()
         comp_dict = {}
         d_count = 0
         for item in all_damaged:
-            if str(item['asset_id']) == str(asset_id):
-                comps = [c.strip() for c in item['component'].split(',') if c.strip()]
-                for c in comps:
-                    comp_dict[c] = comp_dict.get(c, 0) + 1
-                    d_count += 1
+            if item['asset_id'] != asset_id:
+                continue
+            comps = [c.strip() for c in item['component'].split(',') if c.strip()]
+            for c in comps:
+                comp_dict[c] = comp_dict.get(c, 0) + 1
+                d_count += 1
         return d_count, comp_dict
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error fetching damaged components: {e}")
         return 0, {}
 
 # -----------------------------
@@ -184,11 +166,6 @@ def scan_assets():
 
     return jsonify(response)
 
-@app.route('/')
-def health_check():
-    return "AI Server is LIVE. If other pages load forever, the Database is blocking us."
-
-
 # -----------------------------
 # ALL ANOMALIES ENDPOINT
 # -----------------------------
@@ -209,10 +186,9 @@ def all_anomalies():
 
     return jsonify({"anomalies": result, "count": len(result)})
 
-# -----------------------------
-# RUN APP
-# -----------------------------
-if __name__ == '__main__':
-    # Render provides the port via an environment variable
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+
+
+
+# At the end of brain.py
+application = app  # Render expects 'application', not 'app'
+
