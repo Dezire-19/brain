@@ -187,7 +187,14 @@ def all_anomalies():
 
     return jsonify({"anomalies": result, "count": len(result)})
 
-
+@app.route('/test_php')
+def test_php():
+    import requests
+    try:
+        r = requests.get("https://velynasset.infinityfree.me/assets.php?action=all", timeout=10)
+        return r.text[:1000]  # show first 1000 chars
+    except Exception as e:
+        return f"Error: {e}"
 
 # -----------------------------
 # RUN APP
