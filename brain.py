@@ -189,7 +189,21 @@ def all_anomalies():
     return jsonify({"anomalies": result, "count": len(result)})
 
 
+@app.route('/')
+def home():
+    return jsonify({
+        "status": "online",
+        "message": "Velyn AI Neural Link Established",
+        "endpoints": ["/scan", "/all_anomalies"]
+    })
 
+# -----------------------------
+# RUN APP
+# -----------------------------
+if __name__ == '__main__':
+    # Use '0.0.0.0' and grab the PORT from environment for Railway compatibility
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
 
 # At the end of brain.py
 application = app  # Render expects 'application', not 'app'
