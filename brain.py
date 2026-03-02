@@ -6,17 +6,16 @@ import os
 import time
 from flask_cors import CORS
 from datetime import datetime
-import requests
 
 app = Flask(__name__)
 CORS(app)
 
 MODEL_FILE = 'asset_failure_model.pkl'
-PHP_API_BASE = "https://velynasset.infinityfree.me/assets.php"  # PHP API endpoint
 
 # -----------------------------
 # GLOBAL STORAGE
 # -----------------------------
+ASSETS_CACHE = []  # store assets sent by PHP
 ANOMALY_QUEUE = []
 LAST_ANOMALY_TIME = 0
 COOLDOWN = 60  # seconds
@@ -77,52 +76,23 @@ def analyze_asset(asset_id, d_count, age_days, components_dict=None, environment
     return cause, failure_prob
 
 # -----------------------------
-# HELPER: FETCH DATA FROM PHP API
-# -----------------------------
-def fetch_assets():
-    try:
-        response = requests.get(f"{PHP_API_BASE}?action=all")
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        print(f"Error fetching assets: {e}")
-        return []
-
-def fetch_damaged_components(asset_id):
-    try:
-        response = requests.get(f"{PHP_API_BASE}?action=damaged")
-        response.raise_for_status()
-        all_damaged = response.json()
-        comp_dict = {}
-        d_count = 0
-        for item in all_damaged:
-            if item['asset_id'] != asset_id:
-                continue
-            comps = [c.strip() for c in item['component'].split(',') if c.strip()]
-            for c in comps:
-                comp_dict[c] = comp_dict.get(c, 0) + 1
-                d_count += 1
-        return d_count, comp_dict
-    except Exception as e:
-        print(f"Error fetching damaged components: {e}")
-        return 0, {}
-
-# -----------------------------
 # REFRESH ANOMALY QUEUE
 # -----------------------------
 def refresh_anomaly_queue():
     global ANOMALY_QUEUE
-    assets = fetch_assets()
     ANOMALY_QUEUE = []
 
-    for asset in assets:
+    for asset in ASSETS_CACHE:
         try:
-            date_added = datetime.fromisoformat(asset['date_added'])
+            date_added = datetime.fromisoformat(asset.get('date_added', datetime.now().isoformat()))
         except Exception:
             date_added = datetime.now()
         age_days = (datetime.now() - date_added).days
 
-        d_count, components_dict = fetch_damaged_components(asset['asset_id'])
+        # Assume asset can have a "damaged_components" list or "d_count"
+        d_count = asset.get('d_count', 0)
+        components_dict = asset.get('components_dict', {})
+
         thoughts, failure_prob = analyze_asset(asset['asset_id'], d_count, age_days, components_dict)
 
         if d_count >= 3 or "High risk" in thoughts:
@@ -135,12 +105,26 @@ def refresh_anomaly_queue():
             })
 
 # -----------------------------
-# SCAN / BUBBLE NOTIFICATION
+# ENDPOINT: Receive Assets from PHP
+# -----------------------------
+@app.route('/receive_assets', methods=['POST'])
+def receive_assets():
+    global ASSETS_CACHE
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"status": "error", "message": "No data received"}), 400
+        ASSETS_CACHE = data
+        return jsonify({"status": "success", "count": len(data)})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# -----------------------------
+# ENDPOINT: Scan Assets / Bubble Notification
 # -----------------------------
 @app.route('/scan', methods=['GET'])
 def scan_assets():
     global LAST_ANOMALY_TIME, ANOMALY_QUEUE
-
     type_ = request.args.get('type', 'greeting')
     response = {"messages": [], "critical": False, "anomaly": None}
     current_time = int(time.time())
@@ -168,39 +152,27 @@ def scan_assets():
     return jsonify(response)
 
 # -----------------------------
-# ALL ANOMALIES ENDPOINT
+# ENDPOINT: All Anomalies
 # -----------------------------
 @app.route('/all_anomalies', methods=['GET'])
 def all_anomalies():
     if not ANOMALY_QUEUE:
         refresh_anomaly_queue()
 
-    result = []
-    for a in ANOMALY_QUEUE:
-        result.append({
+    result = [
+        {
             "db_id": a['db_id'],
             "asset_id": a['asset_id'],
             "damage_count": a.get('d_count', 0),
             "failure_prob": a.get('failure_prob', 0.0),
             "thoughts": a.get('thoughts', "")
-        })
-
+        } for a in ANOMALY_QUEUE
+    ]
     return jsonify({"anomalies": result, "count": len(result)})
-
-@app.route('/test_php')
-def test_php():
-    import requests
-    try:
-        r = requests.get("https://velynasset.infinityfree.me/assets.php?action=all", timeout=10)
-        return r.text[:1000]  # show first 1000 chars
-    except Exception as e:
-        return f"Error: {e}"
 
 # -----------------------------
 # RUN APP
 # -----------------------------
-
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
-
