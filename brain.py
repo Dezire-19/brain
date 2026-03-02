@@ -171,11 +171,15 @@ def scan_assets():
 # -----------------------------
 # ALL ANOMALIES ENDPOINT
 # -----------------------------
+# -----------------------------
+# ALL ANOMALIES ENDPOINT
+# -----------------------------
 @app.route('/all_anomalies', methods=['GET'])
 def all_anomalies():
-    if not ANOMALY_QUEUE:
-        refresh_anomaly_queue()
-
+    # 1. Get fresh data
+    refresh_anomaly_queue() 
+    
+    # 2. Format the data for the frontend
     result = []
     for a in ANOMALY_QUEUE:
         result.append({
@@ -186,6 +190,10 @@ def all_anomalies():
             "thoughts": a.get('thoughts', "")
         })
 
+    # 3. Print to Railway logs so you can see what happened
+    print(f"SERVER: Sending {len(result)} anomalies to frontend.")
+
+    # 4. Return the final JSON once
     return jsonify({"anomalies": result, "count": len(result)})
 
 
