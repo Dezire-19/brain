@@ -166,6 +166,10 @@ def scan_assets():
 
     return jsonify(response)
 
+@app.route('/')
+def home():
+    return "Velyn AI Service is running!"
+
 # -----------------------------
 # ALL ANOMALIES ENDPOINT
 # -----------------------------
