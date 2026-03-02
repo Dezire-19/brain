@@ -49,9 +49,11 @@ def analyze_asset(asset_id, d_count, age_days, components_dict=None, environment
         'mishandling_score': 0
     }
 
+    # Extract component specific failures if they exist
     for c, count in components_dict.items():
         col_name = c.lower().replace(" ", "_") + "_failures"
-        input_data[col_name] = count
+        if col_name in MODEL_FEATURES:
+            input_data[col_name] = count
 
     features = pd.DataFrame([input_data]).reindex(columns=MODEL_FEATURES, fill_value=0)
     failure_prob = model.predict_proba(features)[0][1]
@@ -66,73 +68,39 @@ def analyze_asset(asset_id, d_count, age_days, components_dict=None, environment
     return cause, failure_prob
 
 # -----------------------------
-# HELPER: FETCH DATA (With Browser Mimicry)
+# NEW: DATA RECEIVER (Plan B - Push from PHP)
 # -----------------------------
-def fetch_assets():
-    # Headers help bypass InfinityFree security walls
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    try:
-        response = requests.get(f"{PHP_API_BASE}?action=all", headers=headers, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        print(f"PHP_FETCH: Received {len(data)} assets.")
-        return data
-    except Exception as e:
-        print(f"PHP_FETCH_ERROR (Assets): {e}")
-        return []
-
-def fetch_damaged_components(asset_id):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    try:
-        response = requests.get(f"{PHP_API_BASE}?action=damaged", headers=headers, timeout=10)
-        response.raise_for_status()
-        all_damaged = response.json()
-        comp_dict = {}
-        d_count = 0
-        for item in all_damaged:
-            # Match IDs safely as strings
-            if str(item['asset_id']) != str(asset_id):
-                continue
-            comps = [c.strip() for c in item['component'].split(',') if c.strip()]
-            for c in comps:
-                comp_dict[c] = comp_dict.get(c, 0) + 1
-                d_count += 1
-        return d_count, comp_dict
-    except Exception as e:
-        print(f"PHP_FETCH_ERROR (Damaged): {e}")
-        return 0, {}
-
-# -----------------------------
-# REFRESH ANOMALY QUEUE
-# -----------------------------
-def refresh_anomaly_queue():
+@app.route('/receive_data', methods=['POST'])
+def receive_data():
     global ANOMALY_QUEUE
-    print("DEBUG: Refreshing Anomaly Queue...")
-    assets = fetch_assets()
-    ANOMALY_QUEUE = []
+    data = request.json
+    
+    if not data or 'assets' not in data:
+        return jsonify({"status": "error", "message": "No data provided"}), 400
+    
+    received_assets = data['assets']
+    ANOMALY_QUEUE = [] # Reset queue with fresh data from PHP
 
-    for asset in assets:
-        try:
-            date_added = datetime.fromisoformat(asset['date_added'])
-        except Exception:
-            date_added = datetime.now()
+    for asset in received_assets:
+        asset_id = asset.get('asset_id')
+        d_count = int(asset.get('d_count', 0))
+        age_days = float(asset.get('age_days', 0))
         
-        age_days = (datetime.now() - date_added).days
-        d_count, components_dict = fetch_damaged_components(asset['asset_id'])
-        thoughts, failure_prob = analyze_asset(asset['asset_id'], d_count, age_days, components_dict)
+        # Analyze using the loaded model
+        thoughts, failure_prob = analyze_asset(asset_id, d_count, age_days)
 
-        # UPDATED: Threshold lowered to 1 for easier testing
-        if d_count >= 1 or failure_prob > 0.5:
-            print(f"DEBUG: Found Anomaly in Asset {asset['asset_id']} (Damage: {d_count})")
+        # If it's damaged at all, put it in the anomaly list
+        if d_count >= 1:
             ANOMALY_QUEUE.append({
-                "db_id": asset['asset_id'],
-                "asset_id": asset['asset_id'],
+                "db_id": asset_id,
+                "asset_id": asset_id,
                 "d_count": d_count,
                 "failure_prob": failure_prob,
                 "thoughts": thoughts
             })
     
-    print(f"DEBUG: Refresh complete. {len(ANOMALY_QUEUE)} anomalies queued.")
+    print(f"PUSH_SYNC: Received {len(received_assets)} assets. Found {len(ANOMALY_QUEUE)} anomalies.")
+    return jsonify({"status": "success", "anomalies_found": len(ANOMALY_QUEUE)})
 
 # -----------------------------
 # ENDPOINTS
@@ -145,9 +113,7 @@ def scan_assets():
     current_time = int(time.time())
 
     if type_ == 'standby':
-        if not ANOMALY_QUEUE:
-            refresh_anomaly_queue()
-
+        # Send one anomaly at a time for the notification bubble
         if ANOMALY_QUEUE and current_time - LAST_ANOMALY_TIME >= COOLDOWN:
             anomaly = ANOMALY_QUEUE.pop(0)
             LAST_ANOMALY_TIME = current_time
@@ -167,7 +133,7 @@ def scan_assets():
 
 @app.route('/all_anomalies', methods=['GET'])
 def all_anomalies():
-    refresh_anomaly_queue()
+    # Return everything currently in the queue
     result = []
     for a in ANOMALY_QUEUE:
         result.append({
@@ -178,7 +144,7 @@ def all_anomalies():
             "thoughts": a.get('thoughts', "")
         })
     
-    print(f"SERVER: Sending {len(result)} anomalies to frontend.")
+    print(f"FRONTEND: Sending {len(result)} anomalies.")
     return jsonify({"anomalies": result, "count": len(result)})
 
 @app.route('/')
@@ -186,7 +152,7 @@ def home():
     return jsonify({
         "status": "online",
         "message": "Velyn AI Neural Link Established",
-        "endpoints": ["/scan", "/all_anomalies"]
+        "endpoints": ["/scan", "/all_anomalies", "/receive_data"]
     })
 
 # -----------------------------
@@ -196,4 +162,5 @@ if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
 
+# Gunicorn compatibility
 application = app
