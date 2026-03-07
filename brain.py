@@ -7,7 +7,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from datetime import datetime
 
-app = Flask(__name__)
+application = Flask(__name__)
 CORS(app)
 
 MODEL_FILE = 'asset_failure_model.pkl'
@@ -140,6 +140,7 @@ def all_anomalies():
 
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
+
 
 
 
