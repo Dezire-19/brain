@@ -11,8 +11,14 @@ app = Flask(__name__)
 CORS(app)
 
 MODEL_FILE = 'asset_failure_model.pkl'
-# Change this line in your app.py
-PHP_URL = "http://localhost/inventory_system/date_api.php"
+PHP_URL = "https://velynasset.infinityfree.me/assets.php"
+response = requests.get(f"{PHP_URL}?action=get_assets")
+
+if response.status_code == 200:
+    assets = response.json()
+    print(assets[:5])  # print first 5 assets
+else:
+    print("Failed to fetch data:", response.status_code)
 
 # Load ML Model
 if os.path.exists(MODEL_FILE):
@@ -136,3 +142,4 @@ def all_anomalies():
 
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
+
