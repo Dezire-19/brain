@@ -87,14 +87,7 @@ def refresh_anomaly_queue():
                 }
                 updated_queue.append(anomaly_obj)
                 
-                # Sync back to PHP history
-                requests.post(f"{PHP_URL}?action=save_history", json={
-                    "asset_id": asset['asset_id'],
-                    "failure_prob": prob,
-                    "d_count": d_count,
-                    "age_days": age_days,
-                    "components": ", ".join(comp_dict.keys())
-                })
+
         
         ANOMALY_QUEUE = updated_queue
     except Exception as e:
@@ -142,4 +135,5 @@ def all_anomalies():
 
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
+
 
