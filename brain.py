@@ -9,19 +9,9 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 MODEL_FILE = 'asset_failure_model.pkl'
-PHP_URL = "https://velynasset.infinityfree.me/assets.php"
-
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/145.0.0.0 Safari/537.36"
-}
-
-try:
-    response = requests.get(f"{PHP_URL}?action=get_assets", headers=headers, timeout=10)
-    response.raise_for_status()  # Raises error if status != 200
-    assets = response.json()
-    print(assets[:5])
-except requests.exceptions.RequestException as e:
-    print("Request failed:", e)
+PHP_URL = "https://velynasset.infinityfree.me/assets.php?action=list"  # use correct action
+response = requests.get(PHP_URL, timeout=5)
+assets = response.json()
 
 # Load ML Model
 if os.path.exists(MODEL_FILE):
@@ -138,6 +128,7 @@ def all_anomalies():
 
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
+
 
 
 
