@@ -6,7 +6,7 @@ import time
 import requests
 from flask_cors import CORS
 from datetime import datetime
-from urllib.parse import quote # Add this at the top of app.py
+from urllib.parse import unquote # Use unquote to ensure we send clean strings
 
 app = Flask(__name__)
 CORS(app)
@@ -27,23 +27,30 @@ else:
 
 # --- THE PHP BRIDGE HELPER ---
 def call_db(action, asset_id=None, method='GET', data=None):
-    """Unified helper to talk to InfinityFree with Browser-like headers"""
+    # Ensure asset_id is a clean string (not URL encoded yet)
+    clean_id = unquote(str(asset_id)) if asset_id else None
     params = {'action': action}
-    if asset_id: params['asset_id'] = asset_id
+    if clean_id: params['asset_id'] = clean_id
     
+    # Updated headers to be even more "Human-like"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Referer": "https://velynasset.infinityfree.me/"
     }
 
     try:
         if method == 'POST':
-            response = requests.post(PHP_URL, params=params, json=data, headers=headers, timeout=10)
+            response = requests.post(PHP_URL, params=params, json=data, headers=headers, timeout=15)
         else:
-            response = requests.get(PHP_URL, params=params, headers=headers, timeout=10)
+            response = requests.get(PHP_URL, params=params, headers=headers, timeout=15)
         
-        if response.status_code == 200:
-            return response.json()
-        return []
+        # Check if response is actually empty
+        if not response.text.strip():
+            print(f"Empty response from PHP for action: {action}")
+            return []
+
+        return response.json()
     except Exception as e:
         print(f"Bridge Connection Error ({action}): {e}")
         return []
@@ -213,5 +220,6 @@ if __name__ == '__main__':
     # Use environment port for Render
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
 
 
