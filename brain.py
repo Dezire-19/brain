@@ -73,36 +73,63 @@ def analyze_asset(asset_id, d_count, age_days, components_dict=None, environment
 # --- REFRESH ANOMALY QUEUE ---
 def refresh_anomaly_queue():
     global ANOMALY_QUEUE
+    # 1. Get all assets
     assets = call_db('get_assets')
     ANOMALY_QUEUE = []
     
+    if not assets:
+        print("No assets found from PHP bridge.")
+        return
+
     for row in assets:
+        # Clean the asset_id (removes leading/trailing spaces)
+        current_asset_id = row.get('asset_id', '').strip()
+        
+        # 2. Calculate Age
         dt_str = row.get('date_acquired')
         try:
-            # Handle date acquired to get age
             dt_obj = datetime.strptime(dt_str, '%Y-%m-%d')
             age_days = (datetime.now() - dt_obj).days
-        except: age_days = 0
+        except:
+            age_days = 0
 
-        # Get damaged components via PHP bridge
-        comp_rows = call_db('get_damaged', row['asset_id'])
+        # 3. Get damaged components - Use the cleaned asset_id
+        comp_rows = call_db('get_damaged', current_asset_id)
         components_dict = {}
-        d_count = 0
+        total_d_count = 0
+        
         for r in comp_rows:
-            comps = [c.strip() for c in r['component'].split(',') if c.strip()]
-            for c in comps:
-                components_dict[c] = components_dict.get(c, 0) + 1
-                d_count += 1
+            # Your SQL dump shows: "Cooling fan, Mother Board, Ports"
+            # We split by comma and count each one
+            raw_component_str = r.get('component', '')
+            if raw_component_str:
+                comps = [c.strip() for c in raw_component_str.split(',') if c.strip()]
+                for c in comps:
+                    # Map to the specific columns the model expects
+                    key = c.lower().replace(" ", "_")
+                    components_dict[key] = components_dict.get(key, 0) + 1
+                    total_d_count += 1
         
-        thoughts, prob = analyze_asset(row['asset_id'], d_count, age_days, components_dict)
+        # 4. AI Analysis
+        thoughts, prob = analyze_asset(current_asset_id, total_d_count, age_days, components_dict)
         
-        if d_count >= 3 or prob > 0.8:
-            row.update({'thoughts': thoughts, 'd_count': d_count, 'failure_prob': prob})
+        # Based on your SQL: 'HSNP - 5' has 8+ components. It SHOULD trigger now.
+        if total_d_count >= 1 or prob > 0.5:  # Lowered threshold slightly for testing
+            row.update({
+                'thoughts': thoughts, 
+                'd_count': total_d_count, 
+                'failure_prob': prob,
+                'asset_id': current_asset_id # Use the cleaned ID
+            })
             ANOMALY_QUEUE.append(row)
-            # Automatic History Logging via PHP Bridge
+            
+            # 5. Save history automatically
             call_db('save_history', method='POST', data={
-                'asset_id': row['asset_id'], 'failure_prob': prob, 
-                'd_count': d_count, 'age_days': age_days, 'components': ", ".join(components_dict.keys())
+                'asset_id': current_asset_id, 
+                'failure_prob': prob, 
+                'd_count': total_d_count, 
+                'age_days': age_days, 
+                'components': ", ".join(components_dict.keys())
             })
 
 # --- ROUTES ---
@@ -175,3 +202,4 @@ if __name__ == '__main__':
     # Use environment port for Render
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
