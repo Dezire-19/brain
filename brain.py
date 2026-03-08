@@ -13,7 +13,7 @@ CORS(app)
 
 # --- SETTINGS ---
 MODEL_FILE = 'asset_failure_model.pkl'
-PHP_URL = "https://velynasset.infinityfree.me/api.php" 
+PHP_URL = "https://velynasset.infinityfree.me/assets.php?action=get_assets" 
 
 ANOMALY_QUEUE = []
 LAST_ANOMALY_TIME = 0
@@ -220,6 +220,7 @@ if __name__ == '__main__':
     # Use environment port for Render
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
