@@ -6,99 +6,85 @@ import time
 import requests
 from flask_cors import CORS
 from datetime import datetime
-from urllib.parse import unquote, quote 
+from urllib.parse import unquote
 
 app = Flask(__name__)
 CORS(app)
 
 # --- SETTINGS ---
 MODEL_FILE = 'asset_failure_model.pkl'
-# FIX: Remove the "?action=..." from the base URL
-PHP_URL = "https://velynasset.infinityfree.me/assets.php" 
+PHP_URL = "https://velynasset.infinityfree.me/api.php" 
 
 ANOMALY_QUEUE = []
 LAST_ANOMALY_TIME = 0
 COOLDOWN = 60 
 
-# --- LOAD MODEL ---
 if os.path.exists(MODEL_FILE):
     model = joblib.load(MODEL_FILE)
 else:
     raise FileNotFoundError(f"Model file '{MODEL_FILE}' not found.")
 
-# --- THE PHP BRIDGE HELPER ---
 def call_db(action, asset_id=None, method='GET', data=None):
     params = {'action': action}
-    if asset_id: 
-        # We pass the raw ID; requests will handle the encoding
-        params['asset_id'] = unquote(str(asset_id))
+    if asset_id: params['asset_id'] = unquote(str(asset_id))
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-        "Referer": "https://velynasset.infinityfree.me/"
+        "Accept": "application/json"
     }
 
     try:
+        session = requests.Session()
         if method == 'POST':
-            response = requests.post(PHP_URL, params=params, json=data, headers=headers, timeout=15)
+            response = session.post(PHP_URL, params=params, json=data, headers=headers, timeout=15)
         else:
-            response = requests.get(PHP_URL, params=params, headers=headers, timeout=15)
+            response = session.get(PHP_URL, params=params, headers=headers, timeout=15)
         
-        if not response.text.strip():
-            return []
-
+        if not response.text.strip(): return []
         return response.json()
     except Exception as e:
-        print(f"Bridge Connection Error ({action}): {e}")
+        print(f"Bridge Error ({action}): {e}")
         return []
 
-# --- HELPER: ANALYZE ASSET ---
-def analyze_asset(asset_id, d_count, age_days, components_dict=None, environment_score=5):
+def analyze_asset(asset_id, d_count, age_days, components_dict=None):
     if components_dict is None: components_dict = {}
     MODEL_FEATURES = ['d_count', 'age_days', 'environment_score', 'mishandling_score',
                       'screen_failures', 'battery_failures', 'keyboard_failures', 'motherboard_failures']
     
-    input_data = {'d_count': d_count, 'age_days': age_days, 'environment_score': environment_score, 'mishandling_score': 0}
+    input_data = {'d_count': d_count, 'age_days': age_days, 'environment_score': 5, 'mishandling_score': 0}
     for c, count in components_dict.items():
         col_name = c.lower().replace(" ", "_") + "_failures"
-        input_data[col_name] = count
+        if col_name in MODEL_FEATURES:
+            input_data[col_name] = count
         
     features = pd.DataFrame([input_data]).reindex(columns=MODEL_FEATURES, fill_value=0)
     failure_prob = model.predict_proba(features)[0][1]
     
-    if failure_prob > 0.8:
-        cause = f"High risk! Asset may fail soon ({failure_prob:.1%}). It has {d_count} damaged components."
-    elif failure_prob > 0.5:
-        cause = f"Moderate risk ({failure_prob:.1%}). Asset has {d_count} components damaged and is {age_days} days old."
-    else:
-        cause = f"Low risk ({failure_prob:.1%}). Asset is currently stable."
-        
-    return cause, failure_prob
+    if failure_prob > 0.8: thoughts = f"High Risk ({failure_prob:.1%}). Urgent maintenance required."
+    elif failure_prob > 0.5: thoughts = f"Moderate Risk ({failure_prob:.1%}). Monitor closely."
+    else: thoughts = f"Low Risk ({failure_prob:.1%}). Stable."
+    
+    return thoughts, failure_prob
 
-# --- REFRESH ANOMALY QUEUE ---
 def refresh_anomaly_queue():
     global ANOMALY_QUEUE
     assets = call_db('get_assets')
     temp_queue = []
     
-    if not assets or not isinstance(assets, list):
-        return
+    if not assets or not isinstance(assets, list): return
 
     for row in assets:
-        # Use a consistent variable name
         asset_id = row.get('asset_id', '')
         if not asset_id: continue
 
-        # 1. Age Calculation
+        # 1. Age
         dt_str = row.get('date_acquired')
         try:
-            dt_obj = datetime.strptime(dt_str, '%Y-%m-%d')
-            age_days = (datetime.now() - dt_obj).days
+            age_days = (datetime.now() - datetime.strptime(dt_str, '%Y-%m-%d')).days
         except:
             age_days = 0
 
-        # 2. Get Damaged Components
+        # 2. Damages
         comp_rows = call_db('get_damaged', asset_id)
         components_dict = {}
         total_d_count = 0
@@ -113,96 +99,27 @@ def refresh_anomaly_queue():
                         components_dict[key] = components_dict.get(key, 0) + 1
                         total_d_count += 1
         
-        # 3. AI Analysis
+        # 3. AI
         thoughts, prob = analyze_asset(asset_id, total_d_count, age_days, components_dict)
         
-        # Threshold for Anomaly
         if total_d_count >= 1 or prob > 0.5:
-            row.update({
-                'thoughts': thoughts, 
-                'd_count': total_d_count, 
-                'failure_prob': prob
-            })
+            row.update({'thoughts': thoughts, 'd_count': total_d_count, 'failure_prob': prob})
             temp_queue.append(row)
             
-            # 4. Save to history (Optional: throttle this if it slows down refresh)
+            # Save history
             call_db('save_history', method='POST', data={
-                'asset_id': asset_id, 
-                'failure_prob': prob, 
-                'd_count': total_d_count, 
-                'age_days': age_days, 
+                'asset_id': asset_id, 'failure_prob': prob, 
+                'd_count': total_d_count, 'age_days': age_days, 
                 'components': ", ".join(components_dict.keys())
             })
+        time.sleep(0.1) # Small delay to prevent InfinityFree rate-limiting
     
     ANOMALY_QUEUE = temp_queue
-
-# --- ROUTES ---
-
-@app.route('/scan', methods=['GET'])
-def scan_assets():
-    global LAST_ANOMALY_TIME, ANOMALY_QUEUE
-    type_ = request.args.get('type', 'greeting')
-    response = {"messages": [], "critical": False, "anomaly": None}
-    current_time = int(time.time())
-    
-    if type_ == 'standby':
-        if not ANOMALY_QUEUE: refresh_anomaly_queue()
-        
-        if ANOMALY_QUEUE and current_time - LAST_ANOMALY_TIME >= COOLDOWN:
-            anomaly = ANOMALY_QUEUE.pop(0)
-            LAST_ANOMALY_TIME = current_time
-            response['critical'] = True
-            response['anomaly'] = {
-                "id": anomaly.get('db_id'),
-                "asset_id": anomaly.get('asset_id'),
-                "damage_count": anomaly.get('d_count'),
-                "failure_prob": anomaly.get('failure_prob'),
-                "thoughts": anomaly.get('thoughts')
-            }
-    else:
-        response['messages'].append("Velyn system active. Neural links established.")
-    return jsonify(response)
 
 @app.route('/all_anomalies', methods=['GET'])
 def all_anomalies():
     refresh_anomaly_queue()
-    result = []
-    for a in ANOMALY_QUEUE:
-        result.append({
-            "db_id": a.get('db_id'),
-            "asset_id": a.get('asset_id'),
-            "damage_count": a.get('d_count', 0),
-            "failure_prob": a.get('failure_prob', 0.0),
-            "thoughts": a.get('thoughts', ""),
-            "date_acquired": a.get('date_acquired')
-        })
-    return jsonify({"anomalies": result, "count": len(result)})
-
-@app.route('/failure_by_month', methods=['GET'])
-def failure_by_month():
-    asset_id = request.args.get('asset_id')
-    data = call_db('failure_history', asset_id)
-    return jsonify({"monthly_failure_rates": data, "asset_id": asset_id})
-
-@app.route('/repaired_by_month', methods=['GET'])
-def repaired_by_month():
-    asset_id = request.args.get('asset_id')
-    data = call_db('repairs', asset_id)
-    return jsonify({"monthly_repairs": data, "asset_id": asset_id})
-
-@app.route('/maintenance_by_month', methods=['GET'])
-def maintenance_by_month():
-    asset_id = request.args.get('asset_id')
-    data = call_db('maintenance', asset_id)
-    return jsonify({"monthly_maintenance": data, "asset_id": asset_id})
-
-@app.route('/last_maintenance', methods=['GET'])
-def last_maintenance():
-    asset_id = request.args.get('asset_id')
-    res = call_db('last_maint', asset_id)
-    # Handle list response from bridge
-    last_m = res[0]['last_maintenance'] if (res and isinstance(res, list) and len(res) > 0) else None
-    return jsonify({"last_maintenance": last_m})
+    return jsonify({"anomalies": ANOMALY_QUEUE, "count": len(ANOMALY_QUEUE)})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
