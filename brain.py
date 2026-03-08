@@ -6,6 +6,7 @@ import time
 import requests
 from flask_cors import CORS
 from datetime import datetime
+from urllib.parse import quote # Add this at the top of app.py
 
 app = Flask(__name__)
 CORS(app)
@@ -73,19 +74,18 @@ def analyze_asset(asset_id, d_count, age_days, components_dict=None, environment
 # --- REFRESH ANOMALY QUEUE ---
 def refresh_anomaly_queue():
     global ANOMALY_QUEUE
-    # 1. Get all assets
     assets = call_db('get_assets')
     ANOMALY_QUEUE = []
     
     if not assets:
-        print("No assets found from PHP bridge.")
         return
 
     for row in assets:
-        # Clean the asset_id (removes leading/trailing spaces)
-        current_asset_id = row.get('asset_id', '').strip()
+        raw_id = row.get('asset_id', '')
+        # Encode the ID so 'HSNP - 1' becomes 'HSNP%20-%201' for the URL
+        encoded_id = quote(raw_id)
         
-        # 2. Calculate Age
+        # 1. Age Calculation
         dt_str = row.get('date_acquired')
         try:
             dt_obj = datetime.strptime(dt_str, '%Y-%m-%d')
@@ -93,22 +93,33 @@ def refresh_anomaly_queue():
         except:
             age_days = 0
 
-        # 3. Get damaged components - Use the cleaned asset_id
-        comp_rows = call_db('get_damaged', current_asset_id)
+        # 2. Get Damaged Components via Bridge
+        comp_rows = call_db('get_damaged', encoded_id)
+        
         components_dict = {}
         total_d_count = 0
         
         for r in comp_rows:
-            # Your SQL dump shows: "Cooling fan, Mother Board, Ports"
-            # We split by comma and count each one
-            raw_component_str = r.get('component', '')
-            if raw_component_str:
-                comps = [c.strip() for c in raw_component_str.split(',') if c.strip()]
-                for c in comps:
-                    # Map to the specific columns the model expects
-                    key = c.lower().replace(" ", "_")
+            raw_comp = r.get('component', '')
+            if raw_comp:
+                # Splitting "Cooling fan, Mother Board" into individual counts
+                parts = [p.strip() for p in raw_comp.split(',') if p.strip()]
+                for p in parts:
+                    key = p.lower().replace(" ", "_")
                     components_dict[key] = components_dict.get(key, 0) + 1
                     total_d_count += 1
+        
+        # 3. AI Analysis
+        thoughts, prob = analyze_asset(raw_id, total_d_count, age_days, components_dict)
+        
+        # LOGIC: If there is ANY damage report, show it for now so we know it works!
+        if total_d_count > 0 or prob > 0.5:
+            row.update({
+                'thoughts': thoughts, 
+                'd_count': total_d_count, 
+                'failure_prob': prob
+            })
+            ANOMALY_QUEUE.append(row)
         
         # 4. AI Analysis
         thoughts, prob = analyze_asset(current_asset_id, total_d_count, age_days, components_dict)
@@ -202,4 +213,5 @@ if __name__ == '__main__':
     # Use environment port for Render
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
 
