@@ -25,8 +25,10 @@ else:
     raise FileNotFoundError(f"Model file '{MODEL_FILE}' not found.")
 
 def call_db(action, asset_id=None, method='GET', data=None):
+    # Construct the query parameters
     params = {'action': action}
-    if asset_id: params['asset_id'] = unquote(str(asset_id))
+    if asset_id: 
+        params['asset_id'] = asset_id 
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -34,14 +36,33 @@ def call_db(action, asset_id=None, method='GET', data=None):
     }
 
     try:
-        session = requests.Session()
-        if method == 'POST':
-            response = session.post(PHP_URL, params=params, json=data, headers=headers, timeout=15)
-        else:
-            response = session.get(PHP_URL, params=params, headers=headers, timeout=15)
+        # Prepare the request to show exactly what is being sent
+        req = requests.Request(method, PHP_URL, params=params, json=data, headers=headers)
+        prepared = req.prepare()
         
-        if not response.text.strip(): return []
+        print(f"--- DEBUG: Attempting API Call ---")
+        print(f"URL: {prepared.url}")  # THIS IS THE LINK YOU CAN TEST IN BROWSER
+        
+        session = requests.Session()
+        response = session.send(prepared, timeout=15)
+
+        # 1. Check for HTTP Errors (404, 403, 500)
+        if response.status_code != 200:
+            print(f"Server returned error code: {response.status_code}")
+            return []
+
+        # 2. Check if the body is empty
+        if not response.text.strip():
+            print("Server returned an empty response.")
+            return []
+
+        # 3. Try parsing JSON
         return response.json()
+
+    except requests.exceptions.JSONDecodeError:
+        print("CRITICAL: Server sent HTML instead of JSON.")
+        print(f"First 100 chars of response: {response.text[:100]}")
+        return []
     except Exception as e:
         print(f"Bridge Error ({action}): {e}")
         return []
@@ -124,3 +145,4 @@ def all_anomalies():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
