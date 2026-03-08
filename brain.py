@@ -23,13 +23,16 @@ COOLDOWN = 60  # seconds
 # -----------------------------
 # DATABASE CONNECTION
 # -----------------------------
+# -----------------------------
+# DATABASE CONNECTION
+# -----------------------------
 def get_db_connection():
     return mysql.connector.connect(
-        host=os.getenv("metro.proxy.rlwy.net"),
-        user=os.getenv("root"),
-        password=os.getenv("PDrDouMEHuOQiAbNdJAwEtakbTUuQRKC"),
-        database=os.getenv("inventory_system"),
-        port=12023  # Keep this as 12023 to match your Railway port
+        host=os.getenv("DB_HOST"),      # This grabs 'metro.proxy.rlwy.net' from Render
+        user=os.getenv("DB_USER"),      # This grabs 'root' from Render
+        password=os.getenv("DB_PASS"),  # This grabs your password from Render
+        database=os.getenv("DB_NAME"),  # This grabs 'inventory_system' from Render
+        port=12023                      # Your specific Railway port
     )
 
 # -----------------------------
@@ -395,4 +398,5 @@ def last_maintenance():
 # -----------------------------
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
+
 
