@@ -6,18 +6,19 @@ import time
 import requests
 from flask_cors import CORS
 from datetime import datetime
-from urllib.parse import unquote # Use unquote to ensure we send clean strings
+from urllib.parse import unquote, quote 
 
 app = Flask(__name__)
 CORS(app)
 
 # --- SETTINGS ---
 MODEL_FILE = 'asset_failure_model.pkl'
-PHP_URL = "https://velynasset.infinityfree.me/assets.php?action=get_assets" 
+# FIX: Remove the "?action=..." from the base URL
+PHP_URL = "https://velynasset.infinityfree.me/assets.php" 
 
 ANOMALY_QUEUE = []
 LAST_ANOMALY_TIME = 0
-COOLDOWN = 60  # seconds
+COOLDOWN = 60 
 
 # --- LOAD MODEL ---
 if os.path.exists(MODEL_FILE):
@@ -27,12 +28,11 @@ else:
 
 # --- THE PHP BRIDGE HELPER ---
 def call_db(action, asset_id=None, method='GET', data=None):
-    # Ensure asset_id is a clean string (not URL encoded yet)
-    clean_id = unquote(str(asset_id)) if asset_id else None
     params = {'action': action}
-    if clean_id: params['asset_id'] = clean_id
+    if asset_id: 
+        # We pass the raw ID; requests will handle the encoding
+        params['asset_id'] = unquote(str(asset_id))
     
-    # Updated headers to be even more "Human-like"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "application/json",
@@ -45,9 +45,7 @@ def call_db(action, asset_id=None, method='GET', data=None):
         else:
             response = requests.get(PHP_URL, params=params, headers=headers, timeout=15)
         
-        # Check if response is actually empty
         if not response.text.strip():
-            print(f"Empty response from PHP for action: {action}")
             return []
 
         return response.json()
@@ -70,7 +68,7 @@ def analyze_asset(asset_id, d_count, age_days, components_dict=None, environment
     failure_prob = model.predict_proba(features)[0][1]
     
     if failure_prob > 0.8:
-        cause = f"High risk! Asset may fail soon ({failure_prob:.1%}). It has {d_count} damaged components. Consider urgent maintenance."
+        cause = f"High risk! Asset may fail soon ({failure_prob:.1%}). It has {d_count} damaged components."
     elif failure_prob > 0.5:
         cause = f"Moderate risk ({failure_prob:.1%}). Asset has {d_count} components damaged and is {age_days} days old."
     else:
@@ -82,16 +80,16 @@ def analyze_asset(asset_id, d_count, age_days, components_dict=None, environment
 def refresh_anomaly_queue():
     global ANOMALY_QUEUE
     assets = call_db('get_assets')
-    ANOMALY_QUEUE = []
+    temp_queue = []
     
-    if not assets:
+    if not assets or not isinstance(assets, list):
         return
 
     for row in assets:
-        raw_id = row.get('asset_id', '')
-        # Encode the ID so 'HSNP - 1' becomes 'HSNP%20-%201' for the URL
-        encoded_id = quote(raw_id)
-        
+        # Use a consistent variable name
+        asset_id = row.get('asset_id', '')
+        if not asset_id: continue
+
         # 1. Age Calculation
         dt_str = row.get('date_acquired')
         try:
@@ -100,55 +98,43 @@ def refresh_anomaly_queue():
         except:
             age_days = 0
 
-        # 2. Get Damaged Components via Bridge
-        comp_rows = call_db('get_damaged', encoded_id)
-        
+        # 2. Get Damaged Components
+        comp_rows = call_db('get_damaged', asset_id)
         components_dict = {}
         total_d_count = 0
         
-        for r in comp_rows:
-            raw_comp = r.get('component', '')
-            if raw_comp:
-                # Splitting "Cooling fan, Mother Board" into individual counts
-                parts = [p.strip() for p in raw_comp.split(',') if p.strip()]
-                for p in parts:
-                    key = p.lower().replace(" ", "_")
-                    components_dict[key] = components_dict.get(key, 0) + 1
-                    total_d_count += 1
+        if isinstance(comp_rows, list):
+            for r in comp_rows:
+                raw_comp = r.get('component', '')
+                if raw_comp:
+                    parts = [p.strip() for p in raw_comp.split(',') if p.strip()]
+                    for p in parts:
+                        key = p.lower().replace(" ", "_")
+                        components_dict[key] = components_dict.get(key, 0) + 1
+                        total_d_count += 1
         
         # 3. AI Analysis
-        thoughts, prob = analyze_asset(raw_id, total_d_count, age_days, components_dict)
+        thoughts, prob = analyze_asset(asset_id, total_d_count, age_days, components_dict)
         
-        # LOGIC: If there is ANY damage report, show it for now so we know it works!
-        if total_d_count > 0 or prob > 0.5:
+        # Threshold for Anomaly
+        if total_d_count >= 1 or prob > 0.5:
             row.update({
                 'thoughts': thoughts, 
                 'd_count': total_d_count, 
                 'failure_prob': prob
             })
-            ANOMALY_QUEUE.append(row)
-        
-        # 4. AI Analysis
-        thoughts, prob = analyze_asset(current_asset_id, total_d_count, age_days, components_dict)
-        
-        # Based on your SQL: 'HSNP - 5' has 8+ components. It SHOULD trigger now.
-        if total_d_count >= 1 or prob > 0.5:  # Lowered threshold slightly for testing
-            row.update({
-                'thoughts': thoughts, 
-                'd_count': total_d_count, 
-                'failure_prob': prob,
-                'asset_id': current_asset_id # Use the cleaned ID
-            })
-            ANOMALY_QUEUE.append(row)
+            temp_queue.append(row)
             
-            # 5. Save history automatically
+            # 4. Save to history (Optional: throttle this if it slows down refresh)
             call_db('save_history', method='POST', data={
-                'asset_id': current_asset_id, 
+                'asset_id': asset_id, 
                 'failure_prob': prob, 
                 'd_count': total_d_count, 
                 'age_days': age_days, 
                 'components': ", ".join(components_dict.keys())
             })
+    
+    ANOMALY_QUEUE = temp_queue
 
 # --- ROUTES ---
 
@@ -161,17 +147,17 @@ def scan_assets():
     
     if type_ == 'standby':
         if not ANOMALY_QUEUE: refresh_anomaly_queue()
-        # Filter for existing assets (simplified via bridge check)
+        
         if ANOMALY_QUEUE and current_time - LAST_ANOMALY_TIME >= COOLDOWN:
             anomaly = ANOMALY_QUEUE.pop(0)
             LAST_ANOMALY_TIME = current_time
             response['critical'] = True
             response['anomaly'] = {
-                "id": anomaly['db_id'],
-                "asset_id": anomaly['asset_id'],
-                "damage_count": anomaly['d_count'],
-                "failure_prob": anomaly['failure_prob'],
-                "thoughts": anomaly['thoughts']
+                "id": anomaly.get('db_id'),
+                "asset_id": anomaly.get('asset_id'),
+                "damage_count": anomaly.get('d_count'),
+                "failure_prob": anomaly.get('failure_prob'),
+                "thoughts": anomaly.get('thoughts')
             }
     else:
         response['messages'].append("Velyn system active. Neural links established.")
@@ -183,8 +169,8 @@ def all_anomalies():
     result = []
     for a in ANOMALY_QUEUE:
         result.append({
-            "db_id": a['db_id'],
-            "asset_id": a['asset_id'],
+            "db_id": a.get('db_id'),
+            "asset_id": a.get('asset_id'),
             "damage_count": a.get('d_count', 0),
             "failure_prob": a.get('failure_prob', 0.0),
             "thoughts": a.get('thoughts', ""),
@@ -214,13 +200,10 @@ def maintenance_by_month():
 def last_maintenance():
     asset_id = request.args.get('asset_id')
     res = call_db('last_maint', asset_id)
-    return jsonify({"last_maintenance": res[0]['last_maintenance'] if res else None})
+    # Handle list response from bridge
+    last_m = res[0]['last_maintenance'] if (res and isinstance(res, list) and len(res) > 0) else None
+    return jsonify({"last_maintenance": last_m})
 
 if __name__ == '__main__':
-    # Use environment port for Render
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
-
-
-
-
