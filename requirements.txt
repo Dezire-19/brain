@@ -5,3 +5,4 @@ joblib
 requests
 gunicorn
 scikit-learn
+mysql-connector-python
